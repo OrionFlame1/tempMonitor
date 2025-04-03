@@ -1,0 +1,14 @@
+{
+    "pins": {
+      "pwm": 18
+    },
+    "night": {
+      "mode": 1,
+      "time_window_hours": "22-8",
+      "speed": 60
+    },
+    "mapping": {
+      "temp_vals": [30, 40, 50],
+      "speed_vals": [60, 80, 100]
+    }
+}
