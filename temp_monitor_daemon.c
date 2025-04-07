@@ -1,24 +1,8 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/mman.h>
-#include <signal.h>
-#include <string.h>
-#include <pi-gpio.h>
-
-#include "config.h"
 #include "helper.h"
 
-#define SHM_NAME "/temp_monitor_daemon_shm"
-#define SHM_SIZE sizeof(SharedData)
-#define PID_FILE "/tmp/temp_monitor_daemon_pid"
-
 volatile sig_atomic_t keep_running = 1;
-SharedData *shm_ptr = NULL;  // Global pointer to shared memory
-int shm_fd = -1;  // Global file descriptor for shared memor
+SharedData *shm_ptr = NULL;
+int shm_fd = -1;
 
 void handle_signal(int sig) {
     keep_running = 0;
@@ -37,6 +21,65 @@ void handle_signal(int sig) {
     
     printf("Daemon stopped and memory freed.\n");
     exit(0);
+}
+
+
+void edit_value(const char *key, const char *value) {
+    int shm_fd = shm_open(SHM_NAME, O_RDWR, 0666);
+    if (shm_fd == -1) {
+        perror("shm_open");
+        exit(1);
+    }
+    SharedData *shm_ptr = mmap(0, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (shm_ptr == MAP_FAILED) {
+        perror("mmap");
+        exit(1);
+    }
+
+    if (strcmp(key, "pwm") == 0) {
+        shm_ptr->pins.pwm = atoi(value);
+        printf("PWM Pin updated to: %d\n", shm_ptr->pins.pwm);
+    } else if (strcmp(key, "mode") == 0) {
+        shm_ptr->night.mode = atoi(value);
+        printf("Night Mode updated to: %d\n", shm_ptr->night.mode);
+    } else if (strcmp(key, "time_window") == 0) {
+        strncpy(shm_ptr->night.time_window_hours, value, sizeof(shm_ptr->night.time_window_hours)-1);
+        shm_ptr->night.time_window_hours[sizeof(shm_ptr->night.time_window_hours)-1] = '\0';
+        printf("Night Time Window updated to: %s\n", shm_ptr->night.time_window_hours);
+    } else if (strcmp(key, "speed") == 0) {
+        shm_ptr->night.speed = atoi(value);
+        printf("Night Speed updated to: %d\n", shm_ptr->night.speed);
+    } else if (strcmp(key, "currentSpeed") == 0) {
+        shm_ptr->currentSpeed = atoi(value);
+        printf("Current Speed updated to: %d\n", shm_ptr->currentSpeed);
+    } else {
+        printf("Invalid key. No value updated.\n");
+    }
+
+    munmap(shm_ptr, SHM_SIZE);
+    close(shm_fd);
+}
+
+void write_time_to_file(const char* string, const char *filename) {
+    FILE *file;
+    time_t rawtime;
+    struct tm *timeinfo;
+
+    // Open file in append mode
+    file = fopen(filename, "a");
+    if (file == NULL) {
+        perror("Error opening file");
+        return;
+    }
+    
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+
+    // Write time to file
+    fprintf(file, "%s - Current Time: %s", string, asctime(timeinfo));
+    fflush(file); // Ensure data is written to file immediately
+
+    fclose(file);
 }
 
 int main() {
@@ -75,35 +118,21 @@ int main() {
         exit(1);
     }
 
-    shm_ptr->pins.pwm = 18;
-    shm_ptr->night.mode = 1;
-    strcpy(shm_ptr->night.time_window_hours, "22-8");
-    shm_ptr->night.speed = 60;
-    shm_ptr->mapping.temp_vals[0] = 30;
-    shm_ptr->mapping.temp_vals[1] = 40;
-    shm_ptr->mapping.temp_vals[2] = 50;
-    shm_ptr->mapping.speed_vals[0] = 60;
-    shm_ptr->mapping.speed_vals[1] = 80;
-    shm_ptr->mapping.speed_vals[2] = 100;
+    SharedData loaded_config = load_config_from_file("config.json");
+    memcpy(shm_ptr, &loaded_config, sizeof(SharedData));
 
     shm_ptr->currentSpeed = 0;
 
-    while (keep_running) {
+    while (1) {
         if(shm_ptr->night.mode && is_night(shm_ptr->night.time_window_hours)) {
-            setSpeed(shm_ptr->night.speed, shm_ptr->pins.pwm);
+            set_speed(shm_ptr->night.speed);
         } else {
-            int result = interpolate(shm_ptr->mapping.temp_vals, shm_ptr->mapping.speed_vals, 3, getTemp());
-            setSpeed(result, shm_ptr->pins.pwm);
-            set_value("currentSpeed", result);
+            int result = interpolate(shm_ptr->mapping.temp_vals, shm_ptr->mapping.speed_vals, 3, get_temp());
+            set_speed(result);
             shm_ptr->currentSpeed = result;
         }
-        msync(shm_ptr, sizeof(SharedData), MS_SYNC);  // Ensure memory sync
-
-        sleep(5);
+        sleep(FREQ);
     }
-
-    // Cleanup before exiting
-    handle_signal(SIGTERM);
 
     return 0;
 }

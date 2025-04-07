@@ -1,39 +1,55 @@
 #include <pi-gpio.h>
 #include <time.h>
+#include <stdbool.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <signal.h>
 
-#define PWM0 18                    // default - to physical pin 12
+#include "parser/cJSON.h"
+#include "config.h"
+
+// daemon related defines
+#define SHM_NAME "/temp_monitor_daemon_shm"
+#define SHM_SIZE sizeof(SharedData)
+#define PID_FILE "/tmp/temp_monitor_daemon_pid"
+
+// constants
+#define PWM0 18
 #define SILENT 60 // preset value to define a speed that will make the fan pretty much silent
 #define FREQ 5 // seconds in-between checks of the temp
 
+// related directly to this fan, DO NOT TOUCH
 #define DIVIDER 18
 #define RANGE 120
 
-void setSpeed(int speed, int pwmPort) {
-    if (!pwmPort) {
-        pwmPort = PWM0;
-    }
-
+void set_speed(int speed) {
     setup();
     
-    pwmSetGpio(pwmPort);
+    pwmSetGpio(18);
 
     pwmSetMode(PWM_MODE_MS); // use a fixed frequency
     pwmSetClock(DIVIDER);
 
-    pwmSetRange(pwmPort, RANGE);
+    pwmSetRange(18, RANGE);
     // The following gives a precise 25kHz PWM signal
     // Noctua recommended value
     // CLOCK / (DIVIDER * RANGE)
-    pwmWrite(pwmPort, RANGE * speed / 100); // duty cycle set
+    pwmWrite(18, RANGE * speed / 100); // duty cycle set
 
     cleanup();
 }
 
-int getTemp() {
+int get_temp() {
     FILE *fp;
     char path[1035];
 
-    /* Open the command for reading. */
     fp = popen("vcgencmd measure_temp", "r");
     if (fp == NULL) {
         printf("Failed to run command\n" );
@@ -43,29 +59,23 @@ int getTemp() {
     int number;
     char *ptr;
 
-    /* Read the output a line at a time - output it. */
     while (fgets(path, sizeof(path), fp) != NULL) {
         number = strtol(path + 5, &ptr, 10); // Skip first 5 characters ("temp=")
     }
 
-    /* close */
     pclose(fp);
 
     return number;
 }
 
-char* getTime() {
-    static char buffer[9];  // Buffer to hold formatted time (HH:mm:ss)
+char* get_time() {
+    static char buffer[9];
     time_t t;
     struct tm *tm_info;
 
-    // Get current time
     time(&t);
-
-    // Convert time to local time
     tm_info = localtime(&t);
 
-    // Format the time as HH:mm:ss
     strftime(buffer, sizeof(buffer), "%H:%M:%S", tm_info);
 
     return buffer;
@@ -87,7 +97,7 @@ int interpolate(int *temp_vals, int *speed_vals, int size, int x) {
         }
     }
 
-    return -1; // Should not happen
+    return -1;
 }
 
 int is_night(char *time_window) {
@@ -106,14 +116,71 @@ int is_night(char *time_window) {
     }
 }
 
-// void update_time(SharedData *shm_ptr) {
-//     if (shm_ptr == NULL) return;  // Ensure the pointer is valid
+char* int_cast_string(int num) {
+    static char buffer[3];
+    sprintf(buffer, "%d", num);
+    return buffer;
+}
 
-//     time_t now = time(NULL);
-//     struct tm *tm_info = localtime(&now);
+bool is_number(const char number[]) {
+    int i = 0;
     
-//     // Correctly write to shared memory
-//     strftime(shm_ptr->currentTime, sizeof(shm_ptr->currentTime), "%H:%M:%S", tm_info);
-    
-//     msync(shm_ptr, sizeof(SharedData), MS_SYNC);  // Ensure memory sync
-// }
+    if (number[0] == '-')
+        i = 1;
+    for (; number[i] != 0; i++)
+    {
+        if (!isdigit(number[i]))
+            return false;
+    }
+    return true;
+}
+
+SharedData load_config_from_file(const char *filename) {
+    SharedData cfg;
+    memset(&cfg, 0, sizeof(SharedData));
+
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        perror("Could not open config file");
+        return cfg;
+    }
+
+    fseek(file, 0, SEEK_END);
+    long len = ftell(file);
+    rewind(file);
+
+    char *data = malloc(len + 1);
+    fread(data, 1, len, file);
+    data[len] = '\0';
+    fclose(file);
+
+    cJSON *json = cJSON_Parse(data);
+    free(data);
+    if (!json) {
+        printf("JSON parse error\n");
+        return cfg;
+    }
+
+    // Pins
+    cJSON *pins = cJSON_GetObjectItem(json, "pins");
+    cfg.pins.pwm = cJSON_GetObjectItem(pins, "pwm")->valueint;
+
+    // Night
+    cJSON *night = cJSON_GetObjectItem(json, "night");
+    cfg.night.mode = cJSON_GetObjectItem(night, "mode")->valueint;
+    strcpy(cfg.night.time_window_hours, cJSON_GetObjectItem(night, "time_window_hours")->valuestring);
+    cfg.night.speed = cJSON_GetObjectItem(night, "speed")->valueint;
+
+    // Mapping
+    cJSON *mapping = cJSON_GetObjectItem(json, "mapping");
+    cJSON *temps = cJSON_GetObjectItem(mapping, "temp_vals");
+    cJSON *speeds = cJSON_GetObjectItem(mapping, "speed_vals");
+
+    for (int i = 0; i < 3; i++) {
+        cfg.mapping.temp_vals[i] = cJSON_GetArrayItem(temps, i)->valueint;
+        cfg.mapping.speed_vals[i] = cJSON_GetArrayItem(speeds, i)->valueint;
+    }
+
+    cJSON_Delete(json);
+    return cfg;
+}
