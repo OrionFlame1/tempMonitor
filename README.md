@@ -37,7 +37,7 @@ setFan <int>
 As an example:
 ```bash
 # set fan speed to 75%
-setfan 75
+setFan 75
 ```
 Observation: setting a static value won't need to start the daemon
 
