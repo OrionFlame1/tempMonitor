@@ -1,4 +1,4 @@
-# Fan Monitor
+# TempMonitor
 
 A Linux CLI and daemon for monitoring system temperature in real time, storing it in shared memory, and providing flexible CLI control. It is dedicated to use on a Raspberry Pi board, and tuned according to use with a Noctua fan.
 For testing, it was used on a Raspberry Pi 4 Model B along with a NF-A4x10 5V PWM fan, and making a good use of the of the pulse-width modulation pin.
