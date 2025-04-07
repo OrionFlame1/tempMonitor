@@ -1,43 +1,11 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <string.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <sys/mman.h>
-#include <unistd.h>
-#include <signal.h>
-#include <ctype.h>
-
-#include "config.h"
 #include "helper.h"
-
-#define SHM_NAME "/temp_monitor_daemon_shm"
-#define SHM_SIZE sizeof(SharedData)
-#define PID_FILE "/tmp/temp_monitor_daemon_pid"
-
-bool isNumber(const char number[]) {
-    int i = 0;
-    
-    //checking for negative numbers
-    if (number[0] == '-')
-        i = 1;
-    for (; number[i] != 0; i++)
-    {
-        //if (number[i] > '9' || number[i] < '0')
-        if (!isdigit(number[i]))
-            return false;
-    }
-    return true;
-}
 
 void start_daemon() {
     if (access(PID_FILE, F_OK) == 0) {
         printf("Daemon is already running.\n");
         return;
     }
-    if (system("./temp_monitor_daemon &") == 0) printf("Daemon started successfully.\n");
+    if (system("sudo ./temp_monitor_daemon &") == 0) printf("Daemon started successfully.\n");
     else perror("Failed to start daemon");
 }
 
@@ -116,9 +84,10 @@ void get_value() {
 
     char currentTime[9];
 
-    printf("TEMP: %d\n", getTemp());
+    printf("TEMP: %d\n", get_temp());
     printf("CURRENT SPEED: %d\n", shm_ptr->currentSpeed);
-    printf("SCAN TIME: %s\n", getTime());
+    printf("INTERPOLATED VALUE: %d\n", interpolate(shm_ptr->mapping.temp_vals, shm_ptr->mapping.speed_vals, 3, get_temp()));
+    printf("SCAN TIME: %s\n", get_time());
     // printf("PWM Pin: %d\n", shm_ptr->pins.pwm);
     // printf("Night Mode: %d\n", shm_ptr->night.mode);
     // printf("Night Time Window: %s\n", shm_ptr->night.time_window_hours);
@@ -174,7 +143,7 @@ void set_value(char *key, char *value) {
         printf("Speed Values updated to: %d, %d, %d\n", shm_ptr->mapping.speed_vals[0], shm_ptr->mapping.speed_vals[1], shm_ptr->mapping.speed_vals[2]);
     } else if (strcmp(key, "currentSpeed") == 0) {
         shm_ptr->currentSpeed = atoi(value);
-        // printf("Current Speed updated to: %d\n", shm_ptr->currentSpeed);
+        printf("Current Speed updated to: %d\n", shm_ptr->currentSpeed);
     } else {
         printf("Invalid key. No value updated.\n");
     }
@@ -188,7 +157,7 @@ int main(int argc, char *argv[]) {
         printf("Usage: %s start | stop | get | set <key> <value>\n", argv[0]);
         return 1;
     }
-    if (isNumber(argv[1])) {
+    if (is_number(argv[1])) {
         int speed = atoi(argv[1]);
         if (speed < 0 || speed > 100) {
             printf("Speed must be between 0 and 100\n");
@@ -196,7 +165,7 @@ int main(int argc, char *argv[]) {
         }
         stop_daemon();
         printf("Setting speed to %d\n", speed);
-        setSpeed(speed, 0);        
+        set_speed(speed);        
 
         return 0;
     }
